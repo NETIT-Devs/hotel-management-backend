@@ -22,7 +22,7 @@ exports.register = async (req, res) => {
 
     const normalizedEmail = email.trim().toLowerCase();
 
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+    if (!/^[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
       return res.status(400).json({
         message: 'Please enter a valid email address.',
       });
