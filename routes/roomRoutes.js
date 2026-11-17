@@ -1,4 +1,3 @@
-
 const express = require('express');
 const router = express.Router();
 
@@ -9,19 +8,32 @@ const {
 
 const {
   getAllRooms,
+  checkRoomAvailability,
   getRoomById,
   createRoom,
+  updateRoom,
   updateRoomStatus,
+  deleteRoom,
 } = require('../controllers/roomController');
 
-// Public room viewing
+// Public room viewing & live availability check
 router.get('/', getAllRooms);
+router.get('/availability', checkRoomAvailability);
 router.get('/:id', getRoomById);
+
+// Admin & Super Admin room management
 router.post(
   '/',
   authMiddleware,
   authorizeRoles('ADMIN', 'SUPER_ADMIN'),
   createRoom
+);
+
+router.put(
+  '/:id',
+  authMiddleware,
+  authorizeRoles('ADMIN', 'SUPER_ADMIN'),
+  updateRoom
 );
 
 router.patch(
@@ -31,9 +43,11 @@ router.patch(
   updateRoomStatus
 );
 
-// These routes MUST be protected by authentication
-// and ADMIN/SUPER_ADMIN role authorization before use.
-//router.post('/', /* authMiddleware, adminOnly, */ createRoom);
-//router.patch('/:id/status', /* authMiddleware, adminOnly, */ updateRoomStatus);
+router.delete(
+  '/:id',
+  authMiddleware,
+  authorizeRoles('ADMIN', 'SUPER_ADMIN'),
+  deleteRoom
+);
 
 module.exports = router;

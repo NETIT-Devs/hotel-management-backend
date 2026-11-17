@@ -5,7 +5,8 @@ const jwt = require('jsonwebtoken');
 
 exports.register = async (req, res) => {
   try {
-    const { fullName, email, phone, password } = req.body;
+    const fullName = req.body.fullName || req.body.full_name;
+    const { email, phone, password } = req.body;
 
     if (
       typeof fullName !== 'string' ||
@@ -22,7 +23,7 @@ exports.register = async (req, res) => {
 
     const normalizedEmail = email.trim().toLowerCase();
 
-    if (!/^[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
       return res.status(400).json({
         message: 'Please enter a valid email address.',
       });
@@ -65,7 +66,9 @@ exports.register = async (req, res) => {
       user: {
         id: result.insertId,
         fullName: fullName.trim(),
+        full_name: fullName.trim(),
         email: normalizedEmail,
+        phone: typeof phone === 'string' && phone.trim() ? phone.trim() : null,
         role: 'CUSTOMER',
       },
     });
@@ -96,7 +99,7 @@ exports.login = async (req, res) => {
     const normalizedEmail = email.trim().toLowerCase();
 
     const [users] = await pool.execute(
-      `SELECT id, full_name, email, password_hash, role, is_active
+      `SELECT id, full_name, email, phone, password_hash, role, is_active
        FROM users
        WHERE email = ?
        LIMIT 1`,
@@ -151,7 +154,9 @@ exports.login = async (req, res) => {
       user: {
         id: user.id,
         fullName: user.full_name,
+        full_name: user.full_name,
         email: user.email,
+        phone: user.phone || null,
         role: user.role,
       },
     });
@@ -161,5 +166,74 @@ exports.login = async (req, res) => {
     return res.status(500).json({
       message: 'Login failed. Please try again.',
     });
+  }
+};
+
+// GET: Logged-in user's profile
+exports.getProfile = async (req, res) => {
+  try {
+    const [users] = await pool.execute(
+      `SELECT id, full_name, email, phone, role, created_at
+       FROM users
+       WHERE id = ?
+       LIMIT 1`,
+      [req.user.id]
+    );
+    if (users.length === 0) {
+      return res.status(404).json({ message: 'User not found.' });
+    }
+    const u = users[0];
+    return res.status(200).json({
+      user: {
+        id: u.id,
+        fullName: u.full_name,
+        full_name: u.full_name,
+        email: u.email,
+        phone: u.phone || '',
+        role: u.role,
+        created_at: u.created_at,
+      },
+    });
+  } catch (error) {
+    console.error('Get profile error:', error.message);
+    return res.status(500).json({ message: 'Failed to retrieve profile.' });
+  }
+};
+
+// PUT: Update logged-in user's profile
+exports.updateProfile = async (req, res) => {
+  try {
+    const fullName = String(req.body.fullName || req.body.full_name || '').trim();
+    const phone = String(req.body.phone || '').trim() || null;
+
+    if (!fullName) {
+      return res.status(400).json({ message: 'Full name is required.' });
+    }
+
+    await pool.execute(
+      `UPDATE users SET full_name = ?, phone = ? WHERE id = ?`,
+      [fullName, phone, req.user.id]
+    );
+
+    const [users] = await pool.execute(
+      `SELECT id, full_name, email, phone, role FROM users WHERE id = ? LIMIT 1`,
+      [req.user.id]
+    );
+
+    const u = users[0];
+    return res.status(200).json({
+      message: 'Profile updated successfully.',
+      user: {
+        id: u.id,
+        fullName: u.full_name,
+        full_name: u.full_name,
+        email: u.email,
+        phone: u.phone || '',
+        role: u.role,
+      },
+    });
+  } catch (error) {
+    console.error('Update profile error:', error.message);
+    return res.status(500).json({ message: 'Failed to update profile.' });
   }
 };

@@ -1,15 +1,14 @@
-
 const pool = require('../config/db');
 const bcrypt = require('bcryptjs');
 
-// GET: Get all Admin accounts
+// GET: Get all Admin accounts (plus Super Admin overview)
 exports.getAllAdmins = async (req, res) => {
   try {
     const [admins] = await pool.execute(
       `SELECT id, full_name, email, phone, role, is_active, created_at
        FROM users
-       WHERE role = 'ADMIN'
-       ORDER BY created_at DESC`
+       WHERE role IN ('ADMIN', 'SUPER_ADMIN')
+       ORDER BY FIELD(role, 'SUPER_ADMIN', 'ADMIN'), created_at DESC`
     );
 
     return res.status(200).json({
@@ -29,13 +28,15 @@ exports.getAllAdmins = async (req, res) => {
 // POST: Create a new Admin account
 exports.createAdmin = async (req, res) => {
   try {
-    const { full_name, email, phone, password } = req.body;
+    const fullName = (req.body.full_name || req.body.fullName || '').trim();
+    const email = (req.body.email || '').trim().toLowerCase();
+    const phone = (req.body.phone || '').trim() || null;
+    const password = req.body.password || '';
+    const isActive = req.body.is_active !== undefined ? (req.body.is_active ? 1 : 0) : 1;
 
     if (
-      typeof full_name !== 'string' ||
-      !full_name.trim() ||
-      typeof email !== 'string' ||
-      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()) ||
+      !fullName ||
+      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ||
       typeof password !== 'string' ||
       password.length < 8
     ) {
@@ -45,11 +46,9 @@ exports.createAdmin = async (req, res) => {
       });
     }
 
-    const normalizedEmail = email.trim().toLowerCase();
-
     const [existingUsers] = await pool.execute(
       'SELECT id FROM users WHERE email = ?',
-      [normalizedEmail]
+      [email]
     );
 
     if (existingUsers.length > 0) {
@@ -64,13 +63,8 @@ exports.createAdmin = async (req, res) => {
     const [result] = await pool.execute(
       `INSERT INTO users
        (full_name, email, phone, password_hash, role, is_active)
-       VALUES (?, ?, ?, ?, 'ADMIN', 1)`,
-      [
-        full_name.trim(),
-        normalizedEmail,
-        phone || null,
-        passwordHash,
-      ]
+       VALUES (?, ?, ?, ?, 'ADMIN', ?)`,
+      [fullName, email, phone, passwordHash, isActive]
     );
 
     return res.status(201).json({
@@ -87,11 +81,15 @@ exports.createAdmin = async (req, res) => {
   }
 };
 
-// PUT: Update Admin account details
+// PUT: Update Admin account details (and optional password / status)
 exports.updateAdmin = async (req, res) => {
   try {
     const adminId = Number(req.params.id);
-    const { full_name, email, phone } = req.body;
+    const fullName = (req.body.full_name || req.body.fullName || '').trim();
+    const email = (req.body.email || '').trim().toLowerCase();
+    const phone = (req.body.phone || '').trim() || null;
+    const password = req.body.password ? String(req.body.password) : '';
+    const isActive = req.body.is_active;
 
     if (!Number.isInteger(adminId) || adminId < 1) {
       return res.status(400).json({
@@ -100,22 +98,15 @@ exports.updateAdmin = async (req, res) => {
       });
     }
 
-    if (
-      typeof full_name !== 'string' ||
-      !full_name.trim() ||
-      typeof email !== 'string' ||
-      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())
-    ) {
+    if (!fullName || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       return res.status(400).json({
         success: false,
         message: 'Please provide a valid name and email.',
       });
     }
 
-    const normalizedEmail = email.trim().toLowerCase();
-
     const [admins] = await pool.execute(
-      "SELECT id FROM users WHERE id = ? AND role = 'ADMIN'",
+      "SELECT id, is_active FROM users WHERE id = ? AND role = 'ADMIN'",
       [adminId]
     );
 
@@ -128,7 +119,7 @@ exports.updateAdmin = async (req, res) => {
 
     const [existingUsers] = await pool.execute(
       'SELECT id FROM users WHERE email = ? AND id != ?',
-      [normalizedEmail, adminId]
+      [email, adminId]
     );
 
     if (existingUsers.length > 0) {
@@ -138,17 +129,31 @@ exports.updateAdmin = async (req, res) => {
       });
     }
 
-    await pool.execute(
-      `UPDATE users
-       SET full_name = ?, email = ?, phone = ?
-       WHERE id = ? AND role = 'ADMIN'`,
-      [
-        full_name.trim(),
-        normalizedEmail,
-        phone || null,
-        adminId,
-      ]
-    );
+    const nextActive =
+      isActive !== undefined ? (Number(isActive) ? 1 : 0) : admins[0].is_active;
+
+    if (password && password.trim().length > 0) {
+      if (password.length < 8) {
+        return res.status(400).json({
+          success: false,
+          message: 'New password must be at least 8 characters.',
+        });
+      }
+      const passwordHash = await bcrypt.hash(password, 12);
+      await pool.execute(
+        `UPDATE users
+         SET full_name = ?, email = ?, phone = ?, password_hash = ?, is_active = ?
+         WHERE id = ? AND role = 'ADMIN'`,
+        [fullName, email, phone, passwordHash, nextActive, adminId]
+      );
+    } else {
+      await pool.execute(
+        `UPDATE users
+         SET full_name = ?, email = ?, phone = ?, is_active = ?
+         WHERE id = ? AND role = 'ADMIN'`,
+        [fullName, email, phone, nextActive, adminId]
+      );
+    }
 
     return res.status(200).json({
       success: true,
@@ -163,7 +168,60 @@ exports.updateAdmin = async (req, res) => {
   }
 };
 
-// DELETE: Deactivate an Admin account
+// PATCH: Toggle or set Admin active status
+exports.toggleAdminStatus = async (req, res) => {
+  try {
+    const adminId = Number(req.params.id);
+    if (!Number.isInteger(adminId) || adminId < 1) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid Admin ID.',
+      });
+    }
+
+    const [admins] = await pool.execute(
+      "SELECT id, is_active FROM users WHERE id = ? AND role = 'ADMIN'",
+      [adminId]
+    );
+
+    if (admins.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Admin account not found.',
+      });
+    }
+
+    const nextStatus =
+      req.body.is_active !== undefined
+        ? Number(req.body.is_active)
+          ? 1
+          : 0
+        : admins[0].is_active
+        ? 0
+        : 1;
+
+    await pool.execute(
+      "UPDATE users SET is_active = ? WHERE id = ? AND role = 'ADMIN'",
+      [nextStatus, adminId]
+    );
+
+    return res.status(200).json({
+      success: true,
+      is_active: nextStatus,
+      message: nextStatus
+        ? 'Admin account activated.'
+        : 'Admin account deactivated.',
+    });
+  } catch (error) {
+    console.error('Toggle Admin status error:', error.message);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to update Admin status.',
+    });
+  }
+};
+
+// DELETE: Permanently delete an Admin account
 exports.deleteAdmin = async (req, res) => {
   try {
     const adminId = Number(req.params.id);
@@ -176,28 +234,26 @@ exports.deleteAdmin = async (req, res) => {
     }
 
     const [result] = await pool.execute(
-      `UPDATE users
-       SET is_active = 0
-       WHERE id = ? AND role = 'ADMIN' AND is_active = 1`,
+      "DELETE FROM users WHERE id = ? AND role = 'ADMIN'",
       [adminId]
     );
 
     if (result.affectedRows === 0) {
       return res.status(404).json({
         success: false,
-        message: 'Active Admin account not found.',
+        message: 'Admin account not found.',
       });
     }
 
     return res.status(200).json({
       success: true,
-      message: 'Admin account deactivated successfully.',
+      message: 'Admin account deleted successfully.',
     });
   } catch (error) {
-    console.error('Deactivate Admin error:', error.message);
+    console.error('Delete Admin error:', error.message);
     return res.status(500).json({
       success: false,
-      message: 'Failed to deactivate Admin account.',
+      message: 'Failed to delete Admin account.',
     });
   }
 };
