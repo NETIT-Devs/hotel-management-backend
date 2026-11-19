@@ -12,6 +12,9 @@ const adminRoutes = require('./routes/adminRoutes');
 const dashboardRoutes = require('./routes/dashboardRoutes');
 const offerRoutes = require('./routes/offerRoutes');
 const galleryRoutes = require('./routes/galleryRoutes');
+const promoRoutes = require('./routes/promoRoutes');
+const facilityRoutes = require('./routes/facilityRoutes');
+const uploadRoutes = require('./routes/uploadRoutes');
 
 const app = express();
 const configuredOrigins = (
@@ -51,6 +54,9 @@ app.use('/api/admins', adminRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/offers', offerRoutes);
 app.use('/api/gallery', galleryRoutes);
+app.use('/api/promo-codes', promoRoutes);
+app.use('/api/facilities', facilityRoutes);
+app.use('/api/uploads', uploadRoutes);
 
 const PORT = process.env.PORT || 5000;
 

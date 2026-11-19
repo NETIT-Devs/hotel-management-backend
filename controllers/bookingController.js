@@ -1,5 +1,7 @@
 const pool = require('../config/db');
 const bcrypt = require('bcryptjs');
+const { evaluatePromoCode } = require('./promoController');
+const { evaluateChildPolicy, normalizeChildAges } = require('../utils/childPolicy');
 
 // Helper to normalize any date string to YYYY-MM-DD
 const normalizeDate = (val) => {
@@ -24,6 +26,8 @@ exports.createBooking = async (req, res) => {
     
     const adults = Number(req.body.adults ?? 1);
     const children = Number(req.body.children ?? 0);
+    const rawChildAges = req.body.child_ages || req.body.childAges || [];
+    const normalizedChildAges = normalizeChildAges(rawChildAges);
     const guests = Number(req.body.guests ?? (adults + children));
     const roomsCount = Number(req.body.roomsCount ?? req.body.rooms_count ?? 1);
 
@@ -34,6 +38,7 @@ exports.createBooking = async (req, res) => {
     const specialRequests = req.body.special_requests || req.body.specialRequests || null;
     const residency = req.body.residency === 'Resident' ? 'Resident' : 'Non-Resident';
     const guestIdNumber = (req.body.guest_id_number || req.body.guestIdNumber || '').trim() || null;
+    const rawPromoCode = (req.body.promo_code || req.body.promoCode || '').trim().toUpperCase() || null;
     let paymentMethod = (req.body.payment_method || req.body.paymentMethod || 'PAY_AT_HOTEL').toUpperCase();
     if (paymentMethod === 'HOTEL') paymentMethod = 'PAY_AT_HOTEL';
 
@@ -99,7 +104,7 @@ exports.createBooking = async (req, res) => {
       This prevents simultaneous booking requests from exceeding inventory.
     */
     const [rooms] = await connection.execute(
-      `SELECT id, price_per_night, resident_price_per_night, capacity, status, total_units
+      `SELECT id, price_per_night, resident_price_per_night, child_extra_bed_price, resident_child_extra_bed_price, capacity, status, total_units
        FROM rooms
        WHERE id = ?
        FOR UPDATE`,
@@ -125,14 +130,24 @@ exports.createBooking = async (req, res) => {
       });
     }
 
-    // Validate guest capacity for the selected number of rooms
+    // Validate guest occupancy using real luxury hotel Child Bedding Policy:
+    // - Infants (Under 1 - 2 yrs) stay free in a complimentary baby cot and do not consume adult bed capacity.
+    // - Up to 1 child (aged 3 - 11) per room can share existing bedding or use an extra rollaway bed.
     const totalCapacity = Number(room.capacity || 2) * roomsCount;
+    const prePolicy = evaluateChildPolicy({
+      childAges: normalizedChildAges,
+      nights: 1,
+      residency,
+    });
+    const nonInfantGuests = Math.max(adults, guests - prePolicy.infantCount);
+    const maxOccupancyWithChildBedding =
+      children > 0 ? totalCapacity + roomsCount : totalCapacity;
 
-    if (guests > totalCapacity) {
+    if (adults > totalCapacity || nonInfantGuests > maxOccupancyWithChildBedding) {
       await connection.rollback();
 
       return res.status(400).json({
-        message: `The selected ${roomsCount} room(s) can accommodate up to ${totalCapacity} guests.`,
+        message: `The selected ${roomsCount} room(s) can accommodate up to ${totalCapacity} adult guests (plus complimentary infants / up to ${roomsCount} child extra bed).`,
       });
     }
 
@@ -175,18 +190,58 @@ exports.createBooking = async (req, res) => {
         ? Number(room.resident_price_per_night)
         : Number(room.price_per_night);
 
-    const calculatedPrice = (
-      nightlyRate * nights * roomsCount
-    ).toFixed(2);
+    // Evaluate per-room Child Age & Extra Rollaway Bed Supplement from DB rates (6-11 yrs only; 0-5 yrs stay free)
+    const childPolicy = evaluateChildPolicy({
+      childAges: normalizedChildAges,
+      nights,
+      residency,
+      childExtraBedPrice: room.child_extra_bed_price,
+      residentChildExtraBedPrice: room.resident_child_extra_bed_price,
+    });
+    const childSupplement = childPolicy.childSupplementTotal;
 
-    const totalPrice = req.body.totalAmount || req.body.total_price || calculatedPrice;
+    const offerDiscount = Math.max(0, Number(req.body.offer_discount) || 0);
+    const baseRoomSubtotal = Math.max(0, nightlyRate * nights * roomsCount - offerDiscount);
+    const staySubtotalWithBedding = Math.round((baseRoomSubtotal + childSupplement) * 100) / 100;
+    let appliedPromoCode = null;
+    let promoDiscountAmt = 0;
 
-    // Insert booking as PENDING with all guest details
+    if (rawPromoCode) {
+      const promoCheck = await evaluatePromoCode(connection, {
+        code: rawPromoCode,
+        subtotal: staySubtotalWithBedding,
+        nights,
+        roomId,
+        residency,
+      });
+
+      if (!promoCheck.valid) {
+        await connection.rollback();
+        return res.status(400).json({
+          message: promoCheck.message,
+        });
+      }
+
+      appliedPromoCode = promoCheck.promo.code;
+      promoDiscountAmt = Number(promoCheck.discountAmount) || 0;
+
+      await connection.execute(
+        'UPDATE promo_codes SET used_count = used_count + 1 WHERE id = ?',
+        [promoCheck.promo.id]
+      );
+    }
+
+    const discountAmount = Math.round((offerDiscount + promoDiscountAmt) * 100) / 100;
+    const taxesAndFees = Math.round(staySubtotalWithBedding * 0.15);
+    const serverTotal = Math.max(0, staySubtotalWithBedding + taxesAndFees - promoDiscountAmt).toFixed(2);
+    const totalPrice = req.body.totalAmount || req.body.total_price || serverTotal;
+
+    // Insert booking as PENDING with all guest & child bedding details
     const [result] = await connection.execute(
       `INSERT INTO bookings
-       (user_id, room_id, check_in, check_out, guests, adults, children, rooms_count, total_price, status,
-        special_requests, payment_method, guest_first_name, guest_last_name, guest_email, guest_phone, residency, guest_id_number)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (user_id, room_id, check_in, check_out, guests, adults, children, child_ages, child_supplement, rooms_count, total_price, status,
+        special_requests, payment_method, guest_first_name, guest_last_name, guest_email, guest_phone, residency, guest_id_number, promo_code, discount_amount)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         userId,
         roomId,
@@ -195,6 +250,8 @@ exports.createBooking = async (req, res) => {
         guests,
         adults,
         children,
+        childPolicy.normalizedAges.length > 0 ? JSON.stringify(childPolicy.normalizedAges) : null,
+        childSupplement,
         roomsCount,
         totalPrice,
         specialRequests,
@@ -205,6 +262,8 @@ exports.createBooking = async (req, res) => {
         guestPhone || null,
         residency,
         guestIdNumber,
+        appliedPromoCode,
+        discountAmount,
       ]
     );
 
@@ -221,6 +280,8 @@ exports.createBooking = async (req, res) => {
         guests,
         adults,
         children,
+        child_ages: childPolicy.normalizedAges,
+        child_supplement: childSupplement,
         roomsCount,
         nights,
         totalPrice,
@@ -266,6 +327,8 @@ exports.getMyBookings = async (req, res) => {
           b.guests,
           b.adults,
           b.children,
+          b.child_ages,
+          b.child_supplement,
           b.rooms_count,
           b.total_price,
           b.status,
@@ -368,6 +431,8 @@ exports.lookupBooking = async (req, res) => {
           b.guests,
           b.adults,
           b.children,
+          b.child_ages,
+          b.child_supplement,
           b.rooms_count,
           b.total_price,
           b.status,
@@ -432,6 +497,8 @@ exports.getAllBookings = async (req, res) => {
           b.guests,
           b.adults,
           b.children,
+          b.child_ages,
+          b.child_supplement,
           b.rooms_count,
           b.total_price,
           b.status,

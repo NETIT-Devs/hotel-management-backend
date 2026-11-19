@@ -41,6 +41,14 @@ const formatRoomRow = (r) => {
       Number(r.resident_price_per_night) > 0
         ? Number(r.resident_price_per_night)
         : Math.round(Number(r.price_per_night || 280) * 0.75),
+    child_extra_bed_price:
+      r.child_extra_bed_price !== null && r.child_extra_bed_price !== undefined
+        ? Number(r.child_extra_bed_price)
+        : 25,
+    resident_child_extra_bed_price:
+      r.resident_child_extra_bed_price !== null && r.resident_child_extra_bed_price !== undefined
+        ? Number(r.resident_child_extra_bed_price)
+        : 15,
     image_url: r.image_url || images[0] || defaultImg,
     special_features: parseJsonArray(r.special_features, []),
     amenities: parseJsonArray(r.amenities, []),
@@ -195,6 +203,8 @@ exports.createRoom = async (req, res) => {
       amenities,
       price_per_night,
       resident_price_per_night,
+      child_extra_bed_price = 25,
+      resident_child_extra_bed_price = 15,
       capacity = 2,
       bed_type = 'King Bed',
       size_sqm = 45,
@@ -233,14 +243,16 @@ exports.createRoom = async (req, res) => {
       resident_price_per_night && Number(resident_price_per_night) > 0
         ? Number(resident_price_per_night)
         : Math.round(Number(price_per_night) * 0.75);
+    const childBedPrice = Math.max(0, Number(child_extra_bed_price ?? 25) || 0);
+    const residentChildBedPrice = Math.max(0, Number(resident_child_extra_bed_price ?? 15) || 0);
 
     const [result] = await pool.execute(
       `INSERT INTO rooms
        (room_name, room_type, category, allowed_package, guests_label, view_type,
         description, long_description, room_overview, special_features, amenities,
-        price_per_night, resident_price_per_night, capacity, bed_type, size_sqm, total_units,
+        price_per_night, resident_price_per_night, child_extra_bed_price, resident_child_extra_bed_price, capacity, bed_type, size_sqm, total_units,
         image_url, video_url, images, gallery_images, status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         room_name.trim(),
         VALID_ROOM_TYPES.includes(normalizedType) ? normalizedType : 'DELUXE',
@@ -255,6 +267,8 @@ exports.createRoom = async (req, res) => {
         toJsonString(amenities || []),
         Number(price_per_night),
         residentPrice,
+        childBedPrice,
+        residentChildBedPrice,
         cap,
         bed_type || 'King Bed',
         size_sqm ? Number(String(size_sqm).replace(/[^0-9.]/g, '')) || 45 : 45,
@@ -306,6 +320,8 @@ exports.updateRoom = async (req, res) => {
       amenities,
       price_per_night,
       resident_price_per_night,
+      child_extra_bed_price = 25,
+      resident_child_extra_bed_price = 15,
       capacity = 2,
       bed_type = 'King Bed',
       size_sqm = 45,
@@ -337,6 +353,8 @@ exports.updateRoom = async (req, res) => {
       resident_price_per_night && Number(resident_price_per_night) > 0
         ? Number(resident_price_per_night)
         : Math.round(Number(price_per_night) * 0.75);
+    const childBedPriceUpdate = Math.max(0, Number(child_extra_bed_price ?? 25) || 0);
+    const residentChildBedPriceUpdate = Math.max(0, Number(resident_child_extra_bed_price ?? 15) || 0);
 
     const [result] = await pool.execute(
       `UPDATE rooms
@@ -353,6 +371,8 @@ exports.updateRoom = async (req, res) => {
            amenities = ?,
            price_per_night = ?,
            resident_price_per_night = ?,
+           child_extra_bed_price = ?,
+           resident_child_extra_bed_price = ?,
            capacity = ?,
            bed_type = ?,
            size_sqm = ?,
@@ -377,6 +397,8 @@ exports.updateRoom = async (req, res) => {
         toJsonString(amenities || []),
         Number(price_per_night),
         residentPriceUpdate,
+        childBedPriceUpdate,
+        residentChildBedPriceUpdate,
         cap,
         bed_type || 'King Bed',
         size_sqm ? Number(String(size_sqm).replace(/[^0-9.]/g, '')) || 45 : 45,

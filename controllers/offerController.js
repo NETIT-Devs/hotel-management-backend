@@ -34,6 +34,7 @@ const formatOfferRow = (o) => {
   const images = parseJsonArray(o.images, [defaultImg]);
   return {
     ...o,
+    long_description: o.long_description || '',
     image_url: o.image_url || images[0] || defaultImg,
     images: images.length > 0 ? images : [defaultImg],
     features: parseJsonArray(o.features, ['Luxury room stay', 'Breakfast for two', 'Late checkout']),
@@ -121,6 +122,8 @@ exports.createOffer = async (req, res) => {
       category,
       subtitle,
       description,
+      long_description,
+      longDescription,
       discount,
       original_price,
       discounted_price,
@@ -145,6 +148,7 @@ exports.createOffer = async (req, res) => {
     const discPrice = Number(discounted_price || 0);
     const finalDiscount = discount || (origPrice > discPrice && origPrice > 0 ? `${Math.round(((origPrice - discPrice) / origPrice) * 100)}% OFF` : 'SPECIAL OFFER');
     const finalSave = save_amount || (origPrice > discPrice ? `Save $${(origPrice - discPrice).toFixed(0)}` : null);
+    const finalLongDescription = (long_description ?? longDescription ?? '').trim() || null;
     const primaryImg =
       image_url ||
       (Array.isArray(images) && images[0]) ||
@@ -152,13 +156,14 @@ exports.createOffer = async (req, res) => {
 
     const [result] = await pool.execute(
       `INSERT INTO offers 
-       (title, category, subtitle, description, discount, original_price, discounted_price, save_amount, valid_until, image_url, images, features, terms, room_id, status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (title, category, subtitle, description, long_description, discount, original_price, discounted_price, save_amount, valid_until, image_url, images, features, terms, room_id, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         title.trim(),
         category || 'SPECIAL OFFER',
         subtitle || null,
         description || null,
+        finalLongDescription,
         finalDiscount,
         origPrice,
         discPrice,
@@ -212,6 +217,8 @@ exports.updateOffer = async (req, res) => {
       category,
       subtitle,
       description,
+      long_description,
+      longDescription,
       discount,
       original_price,
       discounted_price,
@@ -236,6 +243,7 @@ exports.updateOffer = async (req, res) => {
     const discPrice = Number(discounted_price || 0);
     const finalDiscount = discount || (origPrice > discPrice && origPrice > 0 ? `${Math.round(((origPrice - discPrice) / origPrice) * 100)}% OFF` : 'SPECIAL OFFER');
     const finalSave = save_amount || (origPrice > discPrice ? `Save $${(origPrice - discPrice).toFixed(0)}` : null);
+    const finalLongDescription = (long_description ?? longDescription ?? '').trim() || null;
     const primaryImg =
       image_url ||
       (Array.isArray(images) && images[0]) ||
@@ -243,7 +251,7 @@ exports.updateOffer = async (req, res) => {
 
     const [result] = await pool.execute(
       `UPDATE offers 
-       SET title = ?, category = ?, subtitle = ?, description = ?, discount = ?,
+       SET title = ?, category = ?, subtitle = ?, description = ?, long_description = ?, discount = ?,
            original_price = ?, discounted_price = ?, save_amount = ?, valid_until = ?,
            image_url = ?, images = ?, features = ?, terms = ?, room_id = ?, status = ?
        WHERE id = ?`,
@@ -252,6 +260,7 @@ exports.updateOffer = async (req, res) => {
         category || 'SPECIAL OFFER',
         subtitle || null,
         description || null,
+        finalLongDescription,
         finalDiscount,
         origPrice,
         discPrice,
