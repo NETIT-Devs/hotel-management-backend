@@ -341,9 +341,13 @@ exports.getMyBookings = async (req, res) => {
           b.residency,
           b.guest_id_number,
           b.admin_note,
-          b.created_at
+          b.created_at,
+          rv.id AS review_id,
+          rv.status AS review_status,
+          rv.overall_rating AS review_rating
        FROM bookings b
        INNER JOIN rooms r ON b.room_id = r.id
+       LEFT JOIN reviews rv ON rv.booking_id = b.id
        WHERE b.user_id = ?
        ORDER BY b.created_at DESC`,
       [userId]
@@ -406,7 +410,9 @@ exports.cancelMyBooking = async (req, res) => {
 // Public lookup by Booking Reference ID + Guest Email (for non-logged-in guests)
 exports.lookupBooking = async (req, res) => {
   try {
-    const rawId = String(req.query.bookingId || '').replace(/[^0-9]/g, '');
+    const rawQuery = String(req.query.bookingId || '').trim();
+    const segment = rawQuery.includes('-') ? rawQuery.split('-').pop() : rawQuery;
+    const rawId = segment.replace(/[^0-9]/g, '');
     const bookingId = Number(rawId);
     const email = String(req.query.email || '').trim().toLowerCase();
 
@@ -445,10 +451,14 @@ exports.lookupBooking = async (req, res) => {
           b.residency,
           b.guest_id_number,
           b.admin_note,
-          b.created_at
+          b.created_at,
+          rv.id AS review_id,
+          rv.status AS review_status,
+          rv.overall_rating AS review_rating
        FROM bookings b
        INNER JOIN rooms r ON b.room_id = r.id
        INNER JOIN users u ON b.user_id = u.id
+       LEFT JOIN reviews rv ON rv.booking_id = b.id
        WHERE b.id = ? AND (LOWER(b.guest_email) = ? OR LOWER(u.email) = ?)
        LIMIT 1`,
       [bookingId, email, email]
@@ -543,9 +553,9 @@ exports.updateBookingStatus = async (req, res) => {
       });
     }
 
-    if (!['APPROVED', 'REJECTED'].includes(status)) {
+    if (!['APPROVED', 'REJECTED', 'CHECKED_OUT'].includes(status)) {
       return res.status(400).json({
-        message: 'Status must be APPROVED or REJECTED.',
+        message: 'Status must be APPROVED, REJECTED, or CHECKED_OUT.',
       });
     }
 
@@ -577,7 +587,14 @@ exports.updateBookingStatus = async (req, res) => {
 
     const booking = bookings[0];
 
-    if (booking.status !== 'PENDING') {
+    if (status === 'CHECKED_OUT') {
+      if (booking.status !== 'APPROVED') {
+        await connection.rollback();
+        return res.status(409).json({
+          message: 'Only confirmed (APPROVED) bookings can be marked as checked out.',
+        });
+      }
+    } else if (booking.status !== 'PENDING') {
       await connection.rollback();
 
       return res.status(409).json({

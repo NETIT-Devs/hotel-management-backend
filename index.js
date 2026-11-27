@@ -17,6 +17,7 @@ const galleryRoutes = require('./routes/galleryRoutes');
 const promoRoutes = require('./routes/promoRoutes');
 const facilityRoutes = require('./routes/facilityRoutes');
 const uploadRoutes = require('./routes/uploadRoutes');
+const reviewRoutes = require('./routes/reviewRoutes');
 
 const app = express();
 
@@ -67,6 +68,7 @@ app.use('/api/gallery', galleryRoutes);
 app.use('/api/promo-codes', promoRoutes);
 app.use('/api/facilities', facilityRoutes);
 app.use('/api/uploads', uploadRoutes);
+app.use('/api/reviews', reviewRoutes);
 
 // Use PORT from environment variables or default to 5000
 const PORT = process.env.PORT || 5000;
